@@ -7,12 +7,15 @@ name = "matrix-svg"
 version = "0.1.0"
 description = "Generate a static, no-JS Matrix rain SVG animation."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = []
 authors = [
 	{ name = "Shane Macaulay", email = "ktwo@ktwo.ca" }
 ]
 license = { text = "CC-BY-NC-4.0" }
+
+[project.urls]
+Homepage = "https://github.com/K2/matrix.svg"
 
 [project.scripts]
 matrix-svg = "generate_matrix_svg:main"

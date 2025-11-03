@@ -2,6 +2,8 @@ import argparse
 import random
 import xml.etree.ElementTree as ET
 from copy import deepcopy
+from enum import StrEnum
+from itertools import batched, cycle, islice
 from textwrap import dedent
 from typing import Optional
 
@@ -13,21 +15,39 @@ COLUMN_SECONDARY_FACTOR = 0.18
 COLUMN_RANDOM_JITTER = 0.16
 MICRO_PHASE_SCALE = 0.6
 
-BASE_CANVAS_WIDTH = 500.0
+DEFAULT_CANVAS_WIDTH = 1000.0
+LIGHTNING_REFERENCE_WIDTH = 500.0
 EDGE_MARGIN = 0.0
-MIN_SPAN_WIDTH = BASE_CANVAS_WIDTH - 2 * EDGE_MARGIN
 COLUMN_BASE_SPACING = 42.0
 
-NICE_FEATURE_STEPS = [
-    ("disable_font_size_animation", "Disable subtle per-glyph font-size pulsation."),
-    ("disable_micro_jitter", "Disable the small additive transform jitters per glyph."),
-    ("disable_per_glyph_opacity", "Disable per-glyph opacity pulsing."),
-    ("disable_fill_opacity_pulse", "Disable fill-opacity shimmer on each glyph."),
-    ("disable_trail_filter", "Remove the blur-based trail filter."),
-    ("disable_lightning", "Remove the lightning overlay group."),
-]
+class NiceFeature(StrEnum):
+    DISABLE_FONT_SIZE_ANIMATION = "disable_font_size_animation"
+    DISABLE_MICRO_JITTER = "disable_micro_jitter"
+    DISABLE_PER_GLYPH_OPACITY = "disable_per_glyph_opacity"
+    DISABLE_FILL_OPACITY_PULSE = "disable_fill_opacity_pulse"
+    DISABLE_TRAIL_FILTER = "disable_trail_filter"
+    DISABLE_LIGHTNING = "disable_lightning"
 
-MAX_NICE_LEVEL = len(NICE_FEATURE_STEPS)
+
+NICE_FEATURE_ORDER: tuple[NiceFeature, ...] = (
+    NiceFeature.DISABLE_FONT_SIZE_ANIMATION,
+    NiceFeature.DISABLE_MICRO_JITTER,
+    NiceFeature.DISABLE_PER_GLYPH_OPACITY,
+    NiceFeature.DISABLE_FILL_OPACITY_PULSE,
+    NiceFeature.DISABLE_TRAIL_FILTER,
+    NiceFeature.DISABLE_LIGHTNING,
+)
+
+NICE_FEATURE_DESCRIPTIONS = {
+    NiceFeature.DISABLE_FONT_SIZE_ANIMATION: "Disable subtle per-glyph font-size pulsation.",
+    NiceFeature.DISABLE_MICRO_JITTER: "Disable the small additive transform jitters per glyph.",
+    NiceFeature.DISABLE_PER_GLYPH_OPACITY: "Disable per-glyph opacity pulsing.",
+    NiceFeature.DISABLE_FILL_OPACITY_PULSE: "Disable fill-opacity shimmer on each glyph.",
+    NiceFeature.DISABLE_TRAIL_FILTER: "Remove the blur-based trail filter.",
+    NiceFeature.DISABLE_LIGHTNING: "Remove the lightning overlay group.",
+}
+
+MAX_NICE_LEVEL = len(NICE_FEATURE_ORDER)
 
 SVG_NS = "http://www.w3.org/2000/svg"
 DC_NS = "http://purl.org/dc/elements/1.1/"
@@ -249,7 +269,9 @@ LIGHTNING_POINTS_BASE = [
 
 
 def build_lightning(canvas_width: float) -> ET.Element:
-    width_scale = canvas_width / BASE_CANVAS_WIDTH if BASE_CANVAS_WIDTH else 1.0
+    width_scale = (
+        canvas_width / LIGHTNING_REFERENCE_WIDTH if LIGHTNING_REFERENCE_WIDTH else 1.0
+    )
     points = " ".join(
         f"{fmt_num(x * width_scale)},{fmt_num(y)}" for x, y in LIGHTNING_POINTS_BASE
     )
@@ -334,11 +356,11 @@ def resolve_nice_flags(requested_level: int):
     """Clamp the requested nice level and derive which features to disable."""
 
     level = max(0, min(requested_level, MAX_NICE_LEVEL))
-    flags = {name: False for name, _ in NICE_FEATURE_STEPS}
+    flags = {feature: False for feature in NICE_FEATURE_ORDER}
 
-    for idx, (name, _description) in enumerate(NICE_FEATURE_STEPS, start=1):
+    for idx, feature in enumerate(NICE_FEATURE_ORDER, start=1):
         if level >= idx:
-            flags[name] = True
+            flags[feature] = True
 
     return level, flags
 
@@ -617,13 +639,12 @@ def generate_glyph_sequence(column_seed: int, base_glyphs, target_count: int):
         extended_cycle.insert(0, KTWO_GLYPH)
 
     cycle_len = len(extended_cycle)
+    if cycle_len == 0:
+        return glyphs
     rotation = (column_seed * 3) % cycle_len
-    rotated_cycle = [extended_cycle[(rotation + i) % cycle_len] for i in range(cycle_len)]
+    rotated_cycle = extended_cycle[rotation:] + extended_cycle[:rotation]
 
-    cycle_idx = 0
-    while len(glyphs) < target_count:
-        glyphs.append(rotated_cycle[cycle_idx % cycle_len])
-        cycle_idx += 1
+    glyphs.extend(islice(cycle(rotated_cycle), target_count - len(glyphs)))
 
     return glyphs
 
@@ -634,7 +655,7 @@ translate_scales = [1.18, 0.82, 1.35, 0.87, 1.26, 0.79, 1.32, 0.9, 1.24, 0.84, 1
 opacity_scales = [1.12, 0.86, 1.3, 0.9, 1.18, 0.82, 1.24, 0.88, 1.16, 0.84, 1.22, 0.9]
 
 
-def build_matrix_rain(columns, nice_flags) -> ET.Element:
+def build_matrix_rain(columns, nice_flags: dict[NiceFeature, bool]) -> ET.Element:
     rain_group = ET.Element(
         "g",
         {
@@ -652,13 +673,16 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
             {"transform": f'translate({fmt_num(col["x"])},0)'},
         )
         inner_attrs = {}
-        if not nice_flags["disable_trail_filter"]:
+        if not nice_flags[NiceFeature.DISABLE_TRAIL_FILTER]:
             inner_attrs["filter"] = "url(#trailGlow)"
         column_inner = ET.SubElement(column_group, "g", inner_attrs)
 
-        translate_pairs = [
-            tuple(map(float, pair.split(','))) for pair in col["translate_values"].split(';')
-        ]
+        raw_offsets = (
+            float(value)
+            for pair in col["translate_values"].split(';')
+            for value in pair.split(',')
+        )
+        translate_pairs = [tuple(batch) for batch in batched(raw_offsets, 2) if len(batch) == 2]
         start_offset_y = translate_pairs[0][1]
         end_offset_y = translate_pairs[-1][1]
 
@@ -724,10 +748,10 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
                 "transform": f'translate(0,{fmt_num(start_translation)})',
             }
 
-            if nice_flags["disable_per_glyph_opacity"]:
+            if nice_flags[NiceFeature.DISABLE_PER_GLYPH_OPACITY]:
                 text_attrs["opacity"] = fmt_num(peak_opacity)
 
-            if nice_flags["disable_fill_opacity_pulse"]:
+            if nice_flags[NiceFeature.DISABLE_FILL_OPACITY_PULSE]:
                 text_attrs["fill-opacity"] = fill_static
 
             text_elem = ET.SubElement(column_inner, "text", text_attrs)
@@ -746,7 +770,7 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
                 },
             )
 
-            if not nice_flags["disable_fill_opacity_pulse"]:
+            if not nice_flags[NiceFeature.DISABLE_FILL_OPACITY_PULSE]:
                 ET.SubElement(
                     text_elem,
                     "animate",
@@ -759,7 +783,7 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
                     },
                 )
 
-            if not nice_flags["disable_per_glyph_opacity"]:
+            if not nice_flags[NiceFeature.DISABLE_PER_GLYPH_OPACITY]:
                 ET.SubElement(
                     text_elem,
                     "animate",
@@ -772,7 +796,7 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
                     },
                 )
 
-            if not nice_flags["disable_font_size_animation"]:
+            if not nice_flags[NiceFeature.DISABLE_FONT_SIZE_ANIMATION]:
                 ET.SubElement(
                     text_elem,
                     "animateTransform",
@@ -787,7 +811,7 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
                     },
                 )
 
-            if not nice_flags["disable_micro_jitter"]:
+            if not nice_flags[NiceFeature.DISABLE_MICRO_JITTER]:
                 ET.SubElement(
                     text_elem,
                     "animateTransform",
@@ -805,14 +829,21 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
     return rain_group
 
 
-def build_columns(min_gps: int, max_gps: int, regular_count: int, irregular_count: int):
+def build_columns(
+    min_gps: int,
+    max_gps: int,
+    regular_count: int,
+    irregular_count: int,
+    base_canvas_width: float,
+):
     rng = random.Random(0xC0FFEE)
     columns = []
     base_len = len(base_columns)
     irregular_len = len(irregular_offsets)
     total_columns = max(regular_count + irregular_count, 1)
 
-    span_width = max(MIN_SPAN_WIDTH, (total_columns - 1) * COLUMN_BASE_SPACING)
+    min_span_width = max(0.0, base_canvas_width - 2 * EDGE_MARGIN)
+    span_width = max(min_span_width, (total_columns - 1) * COLUMN_BASE_SPACING)
 
     def pick_glyph_target() -> int:
         if min_gps == max_gps:
@@ -833,45 +864,56 @@ def build_columns(min_gps: int, max_gps: int, regular_count: int, irregular_coun
     offset_max = max(irregular_offsets) if irregular_offsets else 1.0
 
     def select_irregular_indices(count: int) -> list[int]:
-        if count <= 0 or irregular_len == 0:
-            return []
-        if count == 1:
-            return [irregular_len // 2]
-        if count <= irregular_len:
-            step = (irregular_len - 1) / (count - 1)
-            indices: list[int] = []
-            used: set[int] = set()
-            for i in range(count):
-                idx = int(round(i * step))
-                idx = max(0, min(irregular_len - 1, idx))
-                while idx in used and idx < irregular_len - 1:
-                    idx += 1
-                if idx in used:
-                    candidate = idx - 1
-                    while candidate >= 0 and candidate in used:
-                        candidate -= 1
-                    if candidate >= 0:
-                        idx = candidate
-                    else:
-                        idx = (idx + 1) % irregular_len
-                        while idx in used:
-                            idx = (idx + 1) % irregular_len
-                used.add(idx)
-                indices.append(idx)
-            return sorted(indices)
-        # count > irregular_len, repeat with rotation for variety
-        indices = []
-        cycles = (count + irregular_len - 1) // irregular_len
-        for cycle in range(cycles):
-            offset = (cycle * 3) % irregular_len
-            for pos in range(irregular_len):
-                idx = (pos + offset) % irregular_len
-                indices.append(idx)
-                if len(indices) == count:
-                    return indices
-        return indices
+        match count:
+            case c if c <= 0 or irregular_len == 0:
+                return []
+            case 1:
+                return [irregular_len // 2]
+            case c if c <= irregular_len:
+                indices: list[int] = []
+                used: set[int] = set()
+                span = irregular_len + 1
+                for i in range(c):
+                    target = ((i + 1) * span / (c + 1)) - 1
+                    idx = int(round(target))
+                    idx = max(0, min(irregular_len - 1, idx))
+                    if idx in used:
+                        offset = 1
+                        found = False
+                        while offset < irregular_len:
+                            right = idx + offset
+                            left = idx - offset
+                            if right < irregular_len and right not in used:
+                                idx = right
+                                found = True
+                                break
+                            if left >= 0 and left not in used:
+                                idx = left
+                                found = True
+                                break
+                            offset += 1
+                        if not found:
+                            idx = (idx + offset) % irregular_len
+                    used.add(idx)
+                    indices.append(idx)
+                return sorted(indices)
+            case _:
+                indices = []
+                cycles = (count + irregular_len - 1) // irregular_len
+                for cycle_idx in range(cycles):
+                    offset = (cycle_idx * 3) % irregular_len
+                    for pos in range(irregular_len):
+                        idx = (pos + offset) % irregular_len
+                        indices.append(idx)
+                        if len(indices) == count:
+                            return indices
+                return indices
 
     irregular_indices = select_irregular_indices(max(0, irregular_count))
+
+    edge_padding_ratio = 0.0
+    if total_columns > 0:
+        edge_padding_ratio = min(0.08, 0.5 / total_columns)
 
     for idx, offset_idx in enumerate(irregular_indices):
         template = deepcopy(base_columns[idx % base_len])
@@ -879,6 +921,9 @@ def build_columns(min_gps: int, max_gps: int, regular_count: int, irregular_coun
             normalized = 0.5
         else:
             normalized = (irregular_offsets[offset_idx] - offset_min) / (offset_max - offset_min)
+        if edge_padding_ratio > 0:
+            normalized = normalized * (1 - 2 * edge_padding_ratio) + edge_padding_ratio
+            normalized = max(0.0, min(1.0, normalized))
         template["x"] = normalized * span_width
         shift = phase_shifts[offset_idx]
         template["translate_begin"] += shift
@@ -902,7 +947,7 @@ def build_columns(min_gps: int, max_gps: int, regular_count: int, irregular_coun
             col["x"] = new_x + EDGE_MARGIN
         canvas_width = span_width + 2 * EDGE_MARGIN
     else:
-        canvas_width = BASE_CANVAS_WIDTH
+        canvas_width = max(base_canvas_width, DEFAULT_CANVAS_WIDTH)
 
     return columns, canvas_width
 
@@ -915,6 +960,7 @@ def build_svg(
     regular_columns: Optional[int] = None,
     irregular_columns: Optional[int] = None,
     include_metadata: bool = True,
+    base_canvas_width: float = DEFAULT_CANVAS_WIDTH,
 ) -> str:
     nice_level, nice_flags = resolve_nice_flags(nice_level)
 
@@ -929,8 +975,15 @@ def build_svg(
     regular_columns = max(0, regular_columns)
     irregular_columns = max(0, irregular_columns)
 
-    columns, canvas_width = build_columns(gps_min, gps_max, regular_columns, irregular_columns)
-    include_lightning = include_lightning and not nice_flags["disable_lightning"]
+    base_canvas_width = max(base_canvas_width, 100.0)
+    columns, canvas_width = build_columns(
+        gps_min,
+        gps_max,
+        regular_columns,
+        irregular_columns,
+        base_canvas_width,
+    )
+    include_lightning = include_lightning and not nice_flags[NiceFeature.DISABLE_LIGHTNING]
 
     width_text = fmt_num(canvas_width)
     svg_attrs = {
@@ -961,8 +1014,8 @@ def build_svg(
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Generate the animated matrix rain SVG (base canvas width {:.0f} with adaptive span)."
-            .format(BASE_CANVAS_WIDTH)
+            "Generate the animated matrix rain SVG (default base canvas width {:.0f} with adaptive span)."
+            .format(DEFAULT_CANVAS_WIDTH)
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -977,8 +1030,8 @@ def parse_args():
     )
     nice_lines = ["  0: keep all visual effects active"]
     nice_lines.extend(
-        f"  {idx}: {desc}"
-        for idx, (_name, desc) in enumerate(NICE_FEATURE_STEPS, start=1)
+        f"  {idx}: {NICE_FEATURE_DESCRIPTIONS[feature]}"
+        for idx, feature in enumerate(NICE_FEATURE_ORDER, start=1)
     )
     parser.epilog = defaults_text + "\nNice levels disable:\n" + "\n".join(nice_lines)
     parser.add_argument(
@@ -1024,6 +1077,23 @@ def parse_args():
         action="store_true",
         help="Skip embedding the RDF/DC metadata block in the SVG output.",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help=(
+            "Emit the README preview scene (disables lightning, trims metadata, narrows glyph counts, "
+            "and uses five regular plus two irregular strands)."
+        ),
+    )
+    parser.add_argument(
+        "--width-offset",
+        type=float,
+        default=0.0,
+        help=(
+            "Adjust the base canvas width by providing an offset from {:.0f}. "
+            "Positive values widen the layout; negative values tighten it."
+        ).format(DEFAULT_CANVAS_WIDTH),
+    )
 
     args = parser.parse_args()
 
@@ -1038,20 +1108,41 @@ def parse_args():
     if args.columns_irregular < 0:
         parser.error("--columns-irregular must be >= 0")
 
+    base_width = DEFAULT_CANVAS_WIDTH + args.width_offset
+    if base_width < 100.0:
+        parser.error("--width-offset results in a canvas width below 100.0")
+
+    args.canvas_width = base_width
+
     return args
 
 
 def main():
     args = parse_args()
-    svg = build_svg(
-        include_lightning=not args.no_lightning,
-        nice_level=args.nice,
-        gps_min=args.gps_min,
-        gps_max=args.gps_max,
-        regular_columns=args.columns_regular,
-        irregular_columns=args.columns_irregular,
-        include_metadata=not args.no_metadata,
-    )
+
+    config = {
+        "include_lightning": not args.no_lightning,
+        "nice_level": args.nice,
+        "gps_min": args.gps_min,
+        "gps_max": args.gps_max,
+        "regular_columns": args.columns_regular,
+        "irregular_columns": args.columns_irregular,
+        "include_metadata": not args.no_metadata,
+        "base_canvas_width": args.canvas_width,
+    }
+
+    if args.preview:
+        config.update(
+            include_lightning=False,
+            nice_level=2,
+            gps_min=14,
+            gps_max=18,
+            regular_columns=5,
+            irregular_columns=2,
+            include_metadata=False,
+        )
+
+    svg = build_svg(**config)
     print(svg)
 
 

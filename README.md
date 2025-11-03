@@ -5,7 +5,7 @@ Static Python CLI that emits a fully self-contained Matrix rain SVG animation. T
 ![Matrix rain preview](assets/matrix-preview.svg)
 
 ## Requirements
-- Python 3.14 or newer (for future-proof template literal support)
+- Python 3.12 or newer
 - No third-party dependencies; the script uses the standard library only
 
 ## Quick Start
@@ -39,13 +39,15 @@ uvx --from . matrix-svg > matrix.svg
 	```
 	This drops a runnable `matrix-svg` shim into uv’s tool directory (add it to `PATH` once via `uv tool update-shell`).
 
-Open the resulting `matrix.svg` in any modern browser or SVG-capable viewer. The output scales to the width of its container by default.
+Open the resulting `matrix.svg` in any modern browser or SVG-capable viewer. Columns are laid out against a 1000 px base canvas (plus any offset you request) and still scale fluidly to the width of their container.
 
 ## Command-Line Options
 - `--no-lightning` – disable the periodic lightning overlay.
 - `--nice LEVEL` – progressively disable visual flourishes for lower-power devices (0 keeps everything; higher levels strip effects in the order listed when you run `--help`).
 - `--gps-min` / `--gps-max` – clamp the glyph count per vertical strand.
 - `--columns-regular` / `--columns-irregular` – control the number of evenly spaced and irregularly offset columns, respectively.
+- `--width-offset VALUE` – tweak the base canvas width (default 1000 px + VALUE) to spread columns wider or pull them closer together without touching the source code.
+- `--preview` – emit the lightweight README preview scene (no lightning, narrow glyph counts, 5 regular + 2 irregular strands, no metadata block).
 
 Use `python generate_matrix_svg.py --help` for the full option reference.
 
@@ -65,12 +67,7 @@ To preview the animation in VS Code, install the “SVG Preview” extension or 
 - `assets/matrix-preview.svg` – lightweight sample embedded above; regenerate it with `python scripts/make_preview.py` (coming soon) or the inline command below.
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-from generate_matrix_svg import build_svg
-svg = build_svg(include_lightning=False, nice_level=2, include_metadata=False, regular_columns=5, irregular_columns=2, gps_min=14, gps_max=18)
-Path('assets/matrix-preview.svg').write_text(svg, encoding='utf-8')
-PY
+python generate_matrix_svg.py --preview > assets/matrix-preview.svg
 ```
 
 ## Development Notes
