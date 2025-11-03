@@ -7,6 +7,12 @@ from typing import Optional
 
 VERTICAL_SPEED_FACTOR = 1.45
 
+COLUMN_WAVE_GROUP = 6
+COLUMN_PHASE_STEP = 0.45
+COLUMN_SECONDARY_FACTOR = 0.18
+COLUMN_RANDOM_JITTER = 0.16
+MICRO_PHASE_SCALE = 0.6
+
 BASE_CANVAS_WIDTH = 500.0
 EDGE_MARGIN = 0.0
 MIN_SPAN_WIDTH = BASE_CANVAS_WIDTH - 2 * EDGE_MARGIN
@@ -656,25 +662,30 @@ def build_matrix_rain(columns, nice_flags) -> ET.Element:
         start_offset_y = translate_pairs[0][1]
         end_offset_y = translate_pairs[-1][1]
 
+        column_wave_base = (col_idx % COLUMN_WAVE_GROUP) * COLUMN_PHASE_STEP
+        column_wave_secondary = (col_idx // COLUMN_WAVE_GROUP) * COLUMN_PHASE_STEP * COLUMN_SECONDARY_FACTOR
+        column_wave_jitter = (((col_idx * 0.61803398875) % 1.0) - 0.5) * COLUMN_RANDOM_JITTER
+        column_anchor = column_wave_base + column_wave_secondary + column_wave_jitter
+
         for glyph_idx, (char, size) in enumerate(col["glyphs"]):
             base_y = 20 + glyph_idx * 40
             pattern_idx = (glyph_idx + col_idx) % len(patterns)
             pattern = patterns[pattern_idx]
-            phase = col_idx * 0.18 + glyph_idx * 0.07
+            micro_phase = (col_idx * 0.18 + glyph_idx * 0.07) * MICRO_PHASE_SCALE
 
             start_y = base_y + start_offset_y
             end_y = base_y + end_offset_y
             start_translation = start_y - base_y
             end_translation = end_y - base_y
 
-            fill_begin = pattern["fill_begin"] - phase
-            jitter_begin = pattern["transform_begin"] - phase * 0.8
-            size_begin = pattern["size_begin"] - phase * 0.5
-            opacity_begin = col["opacity_begin"] - phase * 0.6
+            fill_begin = pattern["fill_begin"] + column_anchor - micro_phase
+            jitter_begin = pattern["transform_begin"] + column_anchor - micro_phase * 0.8
+            size_begin = pattern["size_begin"] + column_anchor - micro_phase * 0.5
+            opacity_begin = col["opacity_begin"] + column_anchor - micro_phase * 0.6
 
             fall_scale = 0.95 + 0.08 * (glyph_idx % 5) + 0.05 * (pattern_idx % 3)
             fall_dur = col["translate_dur"] * fall_scale * VERTICAL_SPEED_FACTOR
-            fall_begin = col["translate_begin"] - phase
+            fall_begin = col["translate_begin"] + column_anchor - micro_phase
 
             opacity_scale = 0.9 + 0.04 * ((glyph_idx + 2 * col_idx) % 4)
             opacity_dur = col["opacity_dur"] * opacity_scale
@@ -821,9 +832,49 @@ def build_columns(min_gps: int, max_gps: int, regular_count: int, irregular_coun
     offset_min = min(irregular_offsets) if irregular_offsets else 0.0
     offset_max = max(irregular_offsets) if irregular_offsets else 1.0
 
-    for idx in range(max(0, irregular_count)):
+    def select_irregular_indices(count: int) -> list[int]:
+        if count <= 0 or irregular_len == 0:
+            return []
+        if count == 1:
+            return [irregular_len // 2]
+        if count <= irregular_len:
+            step = (irregular_len - 1) / (count - 1)
+            indices: list[int] = []
+            used: set[int] = set()
+            for i in range(count):
+                idx = int(round(i * step))
+                idx = max(0, min(irregular_len - 1, idx))
+                while idx in used and idx < irregular_len - 1:
+                    idx += 1
+                if idx in used:
+                    candidate = idx - 1
+                    while candidate >= 0 and candidate in used:
+                        candidate -= 1
+                    if candidate >= 0:
+                        idx = candidate
+                    else:
+                        idx = (idx + 1) % irregular_len
+                        while idx in used:
+                            idx = (idx + 1) % irregular_len
+                used.add(idx)
+                indices.append(idx)
+            return sorted(indices)
+        # count > irregular_len, repeat with rotation for variety
+        indices = []
+        cycles = (count + irregular_len - 1) // irregular_len
+        for cycle in range(cycles):
+            offset = (cycle * 3) % irregular_len
+            for pos in range(irregular_len):
+                idx = (pos + offset) % irregular_len
+                indices.append(idx)
+                if len(indices) == count:
+                    return indices
+        return indices
+
+    irregular_indices = select_irregular_indices(max(0, irregular_count))
+
+    for idx, offset_idx in enumerate(irregular_indices):
         template = deepcopy(base_columns[idx % base_len])
-        offset_idx = idx % irregular_len
         if offset_max == offset_min:
             normalized = 0.5
         else:
