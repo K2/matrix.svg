@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "matrix-svg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generate a static, no-JS Matrix rain SVG animation."
 readme = "README.md"
 requires-python = ">=3.12"
