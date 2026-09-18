@@ -346,6 +346,7 @@ def build_lightning(canvas_width: float) -> ET.Element:
             "opacity": "0",
             # Longer than the bolt path (~650 at the default width) so the
             # dash offset can draw the strike downward instead of popping in.
+            "pathLength": "700",
             "stroke-dasharray": "700",
             "stroke-dashoffset": "700",
         },
