@@ -178,9 +178,9 @@ def build_defs() -> ET.Element:
         "linearGradient",
         {"id": "gradBolt", "gradientUnits": "userSpaceOnUse", "x1": "0", "y1": "0", "x2": "0", "y2": "500"},
     )
-    ET.SubElement(grad_bolt, "stop", {"offset": "0%", "stop-color": "#FFB347"})
-    ET.SubElement(grad_bolt, "stop", {"offset": "60%", "stop-color": "#FF6A00"})
-    ET.SubElement(grad_bolt, "stop", {"offset": "100%", "stop-color": "#FF2400"})
+    ET.SubElement(grad_bolt, "stop", {"offset": "0%", "stop-color": "#F2FFF4"})
+    ET.SubElement(grad_bolt, "stop", {"offset": "45%", "stop-color": "#6BFFB0"})
+    ET.SubElement(grad_bolt, "stop", {"offset": "100%", "stop-color": "#00BF47"})
 
     soft_glow = ET.SubElement(
         defs,
@@ -222,22 +222,22 @@ def build_defs() -> ET.Element:
     flash_glow = ET.SubElement(
         defs,
         "radialGradient",
-        {"id": "flashGlow", "cx": "50%", "cy": "50%", "r": "75%"},
+        {"id": "flashGlow", "cx": "50%", "cy": "0%", "r": "75%"},
     )
     ET.SubElement(
         flash_glow,
         "stop",
-        {"offset": "0%", "stop-color": "#FFB347", "stop-opacity": "0.85"},
+        {"offset": "0%", "stop-color": "#C8FFDD", "stop-opacity": "0.5"},
     )
     ET.SubElement(
         flash_glow,
         "stop",
-        {"offset": "55%", "stop-color": "#FF5F1F", "stop-opacity": "0.45"},
+        {"offset": "55%", "stop-color": "#31FF6B", "stop-opacity": "0.18"},
     )
     ET.SubElement(
         flash_glow,
         "stop",
-        {"offset": "100%", "stop-color": "#FF2400", "stop-opacity": "0"},
+        {"offset": "100%", "stop-color": "#00BF47", "stop-opacity": "0"},
     )
 
     return defs
@@ -278,6 +278,7 @@ def build_lightning(canvas_width: float) -> ET.Element:
 
     lightning = ET.Element("g", {"id": "lightning", "pointer-events": "none"})
 
+    # Ambient glow from the strike origin: a restrained double pulse, not a wash.
     rect = ET.SubElement(
         lightning,
         "rect",
@@ -295,20 +296,24 @@ def build_lightning(canvas_width: float) -> ET.Element:
         "animate",
         {
             "attributeName": "opacity",
-            "values": "0;0;0.88;0",
-            "keyTimes": "0;0.8;0.84;1",
+            "values": "0;0;0.42;0.1;0.3;0",
+            "keyTimes": "0;0.78;0.795;0.815;0.83;1",
             "dur": "12s",
             "repeatCount": "indefinite",
         },
     )
 
-    polyline = ET.SubElement(
+    # Strike stutter shared by the halo and the core: strike, dip, restrike, gone.
+    flicker = "0;0;0.9;0.25;0.75;0"
+    flicker_times = "0;0.78;0.8;0.825;0.84;1"
+
+    halo = ET.SubElement(
         lightning,
         "polyline",
         {
             "points": points,
             "stroke": "url(#gradBolt)",
-            "stroke-width": "12",
+            "stroke-width": "10",
             "stroke-linecap": "round",
             "stroke-linejoin": "round",
             "fill": "none",
@@ -317,34 +322,53 @@ def build_lightning(canvas_width: float) -> ET.Element:
         },
     )
     ET.SubElement(
-        polyline,
+        halo,
         "animate",
         {
             "attributeName": "opacity",
-            "values": "0;0;1;0",
-            "keyTimes": "0;0.82;0.86;1",
+            "values": flicker,
+            "keyTimes": flicker_times,
             "dur": "12s",
             "repeatCount": "indefinite",
         },
     )
+
+    core = ET.SubElement(
+        lightning,
+        "polyline",
+        {
+            "points": points,
+            "stroke": "#EAFFF2",
+            "stroke-width": "2.5",
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+            "fill": "none",
+            "opacity": "0",
+            # Longer than the bolt path (~650 at the default width) so the
+            # dash offset can draw the strike downward instead of popping in.
+            "stroke-dasharray": "700",
+            "stroke-dashoffset": "700",
+        },
+    )
     ET.SubElement(
-        polyline,
+        core,
         "animate",
         {
-            "attributeName": "stroke-width",
-            "values": "12;16;12",
+            "attributeName": "opacity",
+            "values": flicker,
+            "keyTimes": flicker_times,
             "dur": "12s",
-            "begin": "-0.4s",
             "repeatCount": "indefinite",
         },
     )
     ET.SubElement(
-        polyline,
+        core,
         "animate",
         {
             "attributeName": "stroke-dashoffset",
-            "values": "0;-140;0",
-            "dur": "0.9s",
+            "values": "700;700;0;0",
+            "keyTimes": "0;0.78;0.84;1",
+            "dur": "12s",
             "repeatCount": "indefinite",
         },
     )
